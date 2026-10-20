@@ -1,0 +1,32 @@
+# Einmalige Analyse: laedt den Wix-Feed und die Google-Taxonomie
+# und legt beide im Branch "analyse" ab. Wird nach dem Einrichten wieder geloescht.
+name: Analyse (einmalig)
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [.github/workflows/analyse.yml]
+permissions:
+  contents: write
+jobs:
+  analyse:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dateien laden
+        env:
+          WIX_FEED_URL: ${{ secrets.WIX_FEED_URL }}
+        run: |
+          test -n "$WIX_FEED_URL" || { echo "Secret WIX_FEED_URL fehlt"; exit 1; }
+          mkdir out
+          curl -fsSL --retry 3 -A "Mozilla/5.0" -D out/wix-headers.txt -o out/wix-feed.xml "$WIX_FEED_URL"
+          curl -fsSL --retry 3 -o out/taxonomy-with-ids.en-US.txt https://www.google.com/basepages/producttype/taxonomy-with-ids.en-US.txt
+          curl -fsSL --retry 3 -o out/taxonomy-with-ids.de-DE.txt https://www.google.com/basepages/producttype/taxonomy-with-ids.de-DE.txt || true
+          ls -l out
+      - name: In Branch "analyse" ablegen
+        run: |
+          cd out
+          git init -q -b analyse
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A && git commit -qm "Analyse-Daten"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" analyse
