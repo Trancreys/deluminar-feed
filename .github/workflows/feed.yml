@@ -1,0 +1,119 @@
+name: Pinterest-Feed bauen
+
+on:
+  schedule:
+    # 23:07 UTC = 00:07 Uhr (Winter) bzw. 01:07 Uhr (Sommer) Berliner Zeit.
+    # Pinterest holt um 03:00 Uhr ab. Die 7 Minuten vermeiden den Andrang zur vollen Stunde.
+    - cron: "7 23 * * *"
+  workflow_dispatch:
+    inputs:
+      erzwingen:
+        description: "Auch veröffentlichen, wenn deutlich weniger Produkte als beim letzten Lauf im Feed sind"
+        type: boolean
+        default: false
+      test_fehler:
+        description: "Nur zum Testen: Lauf absichtlich fehlschlagen lassen (der Feed bleibt unverändert)"
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths: ["einstellungen.ini", "veredler.py", ".github/workflows/feed.yml"]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  issues: write
+  actions: write
+
+concurrency:
+  group: feed
+  cancel-in-progress: false
+
+jobs:
+  feed:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}pinterest.xml
+    env:
+      GH_TOKEN: ${{ github.token }}
+      FEED_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/pinterest.xml
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Testfehler (nur auf Wunsch)
+        if: inputs.test_fehler
+        run: |
+          echo "::error::Absichtlicher Testfehler. Der veröffentlichte Feed bleibt unverändert."
+          echo "Absichtlicher Testfehler – alles in Ordnung, wenn du diese Meldung bekommst." > fehler.md
+          exit 1
+
+      - name: Feed holen, veredeln und prüfen
+        env:
+          WIX_FEED_URL: ${{ secrets.WIX_FEED_URL }}
+        run: >-
+          python3 veredler.py
+          --einstellungen einstellungen.ini
+          --ausgabe public/pinterest.xml
+          --vorher "$FEED_URL"
+          --meldungen meldungen
+          ${{ inputs.erzwingen && '--erzwingen' || '' }}
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: public
+
+      - name: Veröffentlichen
+        id: deploy
+        uses: actions/deploy-pages@v4
+
+      - name: Öffentliche Adresse prüfen
+        run: |
+          for i in 1 2 3 4 5 6; do
+            sleep 20
+            if curl -fsS "$FEED_URL?lauf=$GITHUB_RUN_ID" -o live.xml && cmp -s live.xml public/pinterest.xml; then
+              echo "Öffentlicher Feed ist aktuell: $FEED_URL"; exit 0
+            fi
+          done
+          echo "Unter $FEED_URL ist nicht der neue Feed zu sehen." > meldungen/fehler.md
+          echo "::error::$(cat meldungen/fehler.md)"; exit 1
+
+      - name: Hinweise als Issue melden
+        run: |
+          melden() {  # $1 = Issue-Titel, $2 = Datei mit Text; ohne Datei wird ein offenes Issue geschlossen
+            nr=$(gh issue list --state open --limit 100 --json number,title --jq ".[] | select(.title == \"$1\") | .number" | head -n1)
+            if [ -f "$2" ]; then
+              if [ -n "$nr" ]; then gh issue edit "$nr" --body-file "$2"
+              else gh issue create --title "$1" --body-file "$2" --assignee "$GITHUB_REPOSITORY_OWNER"; fi
+            elif [ -n "$nr" ]; then
+              gh issue close "$nr" --comment "Erledigt: Der Lauf vom $(TZ=Europe/Berlin date '+%d.%m.%Y %H:%M') war in Ordnung."
+            fi
+          }
+          melden "Neues Produkt: bitte Titel und Kategorie eintragen" meldungen/neues-produkt.md
+          melden "Feed-Veredler: bitte Einstellungen prüfen" meldungen/hinweise.md
+          melden "Feed-Lauf fehlgeschlagen" ""
+
+      - name: Fehler als Issue melden
+        if: failure()
+        run: |
+          {
+            echo "Der Lauf vom $(TZ=Europe/Berlin date '+%d.%m.%Y %H:%M') ist fehlgeschlagen."
+            echo "Pinterest bekommt weiter den zuletzt veröffentlichten Feed."
+            echo
+            for f in meldungen/fehler.md fehler.md; do
+              if [ -f "$f" ]; then cat "$f"; fi
+            done
+            echo
+            echo "Details: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } > bericht.md
+          nr=$(gh issue list --state open --limit 100 --json number,title --jq '.[] | select(.title == "Feed-Lauf fehlgeschlagen") | .number' | head -n1)
+          if [ -n "$nr" ]; then gh issue comment "$nr" --body-file bericht.md
+          else gh issue create --title "Feed-Lauf fehlgeschlagen" --body-file bericht.md --assignee "$GITHUB_REPOSITORY_OWNER"; fi
+
+      - name: Zeitplan aktiv halten
+        # GitHub schaltet Zeitpläne nach 60 Tagen ohne Aktivität ab.
+        # Das erneute Aktivieren über die API setzt diese Frist jedes Mal zurück.
+        if: always()
+        continue-on-error: true
+        run: gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/feed.yml/enable"
