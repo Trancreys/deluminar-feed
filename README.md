@@ -42,9 +42,10 @@ jeder Lauf den Zeitplan am Ende selbst neu, dadurch beginnt die Frist jede Nacht
   Hälfte), oder Daten würden verändert:** Dann wird nichts veröffentlicht. Pinterest bekommt weiter den
   zuletzt funktionierenden Feed. Der Lauf schlägt fehl, und du bekommst eine Mail von GitHub sowie ein
   Issue „Feed-Lauf fehlgeschlagen“. Beim nächsten erfolgreichen Lauf wird das Issue automatisch geschlossen.
-- **Neues Produkt in Wix, das noch nicht in den Einstellungen steht:** Es wird mit dem Wix-Titel
-  veröffentlicht. Du bekommst ein Issue „Neues Produkt: bitte Titel und Kategorie eintragen“ mit einem
-  fertigen Block zum Hineinkopieren.
+- **Neues Produkt in Wix, das noch nicht in den Einstellungen steht:** Es kommt automatisch in den
+  Feed, mit Titel und Kategorie aus dem Abschnitt `[Standard]` (z. B. „Name – handgefertigte Holzlampe,
+  Eiche Natur, 80 cm“, Kategorie 594 = Beleuchtung). Du bekommst ein Issue „Neues Produkt: bitte Titel und
+  Kategorie eintragen“ mit einem fertigen Block zum Hineinkopieren, damit es einen genauen Titel bekommt.
 
 ## Technik
 

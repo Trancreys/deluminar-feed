@@ -89,7 +89,8 @@ def einstellungen_lesen(pfad):
     for abschnitt in cp.sections():
         if abschnitt != "Schreibweisen":
             produkte[abschnitt.strip().lower()] = {k.lower(): v.strip() for k, v in cp[abschnitt].items()}
-    return produkte, schreibweisen
+    standard = produkte.pop("standard", {})  # gilt für Produkte, die noch nicht eingetragen sind
+    return produkte, standard, schreibweisen
 
 
 def titel_bauen(vorlage, werte, schreibweisen):
@@ -102,8 +103,10 @@ def titel_bauen(vorlage, werte, schreibweisen):
             return m.group(0)
         return schreibweisen.get(werte[name], werte[name])
 
-    titel = re.sub(r"\{([^{}]+)\}", ersetzen, vorlage)
-    return " ".join(titel.split()), fehlend
+    titel = " ".join(re.sub(r"\{([^{}]+)\}", ersetzen, vorlage).split())
+    # Kommas aufräumen, falls ein Platzhalter leer war (z. B. {Varianten} ohne Varianten)
+    titel = re.sub(r"\s*,(\s*,)*\s*$", "", re.sub(r",(\s*,)+", ",", titel))
+    return titel, fehlend
 
 
 def titel_setzen(block, titel):
@@ -126,7 +129,7 @@ def kategorie_setzen(block, kategorie):
     return block[:-len("</item>")] + tag + "</item>"
 
 
-def veredeln(quelle, produkte, schreibweisen):
+def veredeln(quelle, produkte, standard, schreibweisen):
     """Gibt (neuer Feed als Text, Zeilen für Bericht, neue Produkte, Hinweise) zurück."""
     try:
         text = quelle.decode("utf-8")
@@ -149,10 +152,13 @@ def veredeln(quelle, produkte, schreibweisen):
         produkt = produkte.get(iid.lower()) or produkte.get(gid.lower())
         if produkt is None:
             neue.setdefault(gid or iid, (wix_titel, []))[1].append(werte)
-        else:
+            produkt = standard
+        if produkt:
             name = produkt.get("name") or wix_titel
+            platzhalter = {"title": wix_titel, **werte,
+                           "Varianten": ", ".join(schreibweisen.get(v, v) for v in werte.values())}
             if produkt.get("titel"):
-                neu, fehlend = titel_bauen(produkt["titel"], werte, schreibweisen)
+                neu, fehlend = titel_bauen(produkt["titel"], platzhalter, schreibweisen)
                 if fehlend:
                     hinweise.append(f"**{name}** (ID `{iid}`): Platzhalter {', '.join('{' + f + '}' for f in fehlend)} "
                                     "gibt es bei dieser Variante nicht. Dafür wird der Wix-Titel verwendet.")
@@ -198,9 +204,13 @@ def pruefen(quelle, ergebnis, zeilen):
             raise FeedFehler(f"Eintrag {iid}: Kategorie wurde nicht richtig gesetzt")
 
 
-def neue_produkte_text(neue):
+def neue_produkte_text(neue, standard):
+    if standard:
+        vorerst = "mit dem Standard-Titel und der Standard-Kategorie aus dem Abschnitt `[Standard]`"
+    else:
+        vorerst = "mit dem Wix-Titel und ohne Kategorie"
     text = ["Diese Produkte sind im Wix-Feed, aber nicht in `einstellungen.ini`. "
-            "Sie werden mit dem Wix-Titel und ohne Kategorie veröffentlicht.", "",
+            f"Sie werden vorerst {vorerst} veröffentlicht.", "",
             "So trägst du sie ein: `einstellungen.ini` öffnen, auf den Stift klicken, "
             "den Block unten ans Ende kopieren, Titel und Kategorie ausfüllen und auf **Commit changes** klicken.", "",
             "```ini"]
@@ -214,7 +224,7 @@ def neue_produkte_text(neue):
         text += [f"[{gid}]", f"name = {wix_titel}"]
         if merkmale:
             text.append("# Varianten im Feed: " + "; ".join("{" + k + "} = " + " | ".join(v) for k, v in merkmale.items()))
-        text += [f"titel = {wix_titel}", "kategorie = ", ""]
+        text += [f"titel = {standard.get('titel') or wix_titel}", f"kategorie = {standard.get('kategorie', '')}", ""]
     return "\n".join(text).rstrip() + "\n```\n"
 
 
@@ -247,9 +257,9 @@ def main():
     try:
         if not args.quelle:
             raise FeedFehler("Keine Wix-Feed-URL angegeben (Secret WIX_FEED_URL fehlt?)")
-        produkte, schreibweisen = einstellungen_lesen(args.einstellungen)
+        produkte, standard, schreibweisen = einstellungen_lesen(args.einstellungen)
         quelle = laden(args.quelle)
-        ergebnis, zeilen, neue, hinweise = veredeln(quelle, produkte, schreibweisen)
+        ergebnis, zeilen, neue, hinweise = veredeln(quelle, produkte, standard, schreibweisen)
 
         if args.vorher and not args.erzwingen:
             vorher = laden(args.vorher, fehlt_ok=True)
@@ -272,7 +282,7 @@ def main():
 
     schreiben(args.ausgabe, ergebnis)
     if neue:
-        schreiben(os.path.join(args.meldungen, "neues-produkt.md"), neue_produkte_text(neue))
+        schreiben(os.path.join(args.meldungen, "neues-produkt.md"), neue_produkte_text(neue, standard))
     if hinweise:
         schreiben(os.path.join(args.meldungen, "hinweise.md"), "\n".join(f"- {h}" for h in hinweise) + "\n")
     for h in hinweise:
